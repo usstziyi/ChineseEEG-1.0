@@ -215,7 +215,7 @@ def main(subjects: list[str]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="为指定被试导出小说逐行文本 CSV")
-    parser.add_argument("subjects", nargs="*", help="被试编号，如 sub-04 sub-05；缺省时使用 SUBJECTS")
+    parser.add_argument("--subjects", nargs="*", help="被试编号，如 sub-04 sub-05；缺省时使用 SUBJECTS")
     return parser.parse_args()
 
 
