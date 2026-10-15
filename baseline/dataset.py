@@ -29,7 +29,7 @@ SFREQ = 256
 TASK = "task-reading"
 
 # 每个 token 的采样点数
-TOKEN_SAMPLES = 90
+TOKEN_SAMPLES = 100
 # n_chars 的实测上限（1~10），也是 batch 里 token 维度补齐的目标长度
 MAX_TOKENS = 10
 
