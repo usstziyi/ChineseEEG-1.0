@@ -48,7 +48,7 @@ OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed/novels"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
 TEXT_COLUMN = 0  # 单列 Chinese_text
-FIELDS = ["index", "chapter", "run", "onset", "sample", "sentence", "n_chars"]
+FIELDS = ["index", "chapter", "run", "sentence", "n_chars", "onset", "sample"]
 
 SUBJECTS = ["sub-04", "sub-05"]
 TASK = "task-reading"
