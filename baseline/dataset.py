@@ -19,7 +19,7 @@ from pathlib import Path
 import mne
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EEG_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30"
@@ -130,3 +130,26 @@ def pad_collate(batch: list[tuple[torch.Tensor, str]]):
         sentences.append(sentence)
 
     return tokens, mask, sentences
+
+
+def main() -> None:
+    """冒烟检查：遍历所有 CSV 建立 dataset，打印规模，并跑一个 batch。"""
+    datasets: list[ReadingEEGDataset] = []
+    for csv_path in sorted(CSV_ROOT.glob("*.csv")):
+        subject, novel = csv_path.stem.split("_", 1)
+        dataset = ReadingEEGDataset(subject, novel)
+        datasets.append(dataset)
+
+        tokens, sentence = dataset[0]
+        print(f"{subject} {novel:<14} {len(dataset):>5} 条 | 首条 {tuple(tokens.shape)} {tokens.dtype} | {sentence!r}")
+    first = datasets[0]
+    loader = DataLoader(first, batch_size=4, collate_fn=pad_collate)
+    tokens, mask, sentences = next(iter(loader))
+    print(f"\n{first.subject} {first.novel} 取一个 batch (batch_size=4):")
+    print(f"  tokens {tuple(tokens.shape)} {tokens.dtype}")
+    print(f"  mask   {tuple(mask.shape)} {mask.dtype} -> 每条真实 token 数 {mask.sum(dim=1).tolist()}")
+    print(f"  text   {sentences}")
+
+
+if __name__ == "__main__":
+    main()
