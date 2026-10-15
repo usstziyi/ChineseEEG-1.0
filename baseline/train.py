@@ -38,7 +38,7 @@ train / val 按 **句子** 切分（不是按样本），保证两侧句子集�
 
     uv run python baseline/train.py
     uv run python baseline/train.py --subject sub-04 --novel LittlePrince
-    uv run python baseline/train.py --subject sub-04 --novel GarnettDream --epochs 20 --batch-size 32
+    uv run python baseline/train.py --subject sub-04 --novel GarnettDream --epochs 20 --batch-size 64
 """
 
 from __future__ import annotations
@@ -260,19 +260,12 @@ def parse_args():
     parser.add_argument("--novel", default="LittlePrince", help="小说名，如 LittlePrince（默认 LittlePrince）")
     parser.add_argument("--min-chars", type=int, default=4, help="只保留 n_chars >= 该值的句子（默认 4）")
     parser.add_argument("--val-ratio", type=float, default=0.2, help="验证集句子比例（默认 0.2）")
-    parser.add_argument("--batch-size", type=int, default=32, help="batch 大小（默认 32）")
+    parser.add_argument("--batch-size", type=int, default=64, help="batch 大小（默认 64）")
     parser.add_argument("--epochs", type=int, default=30, help="训练轮数（默认 30）")
     parser.add_argument("--lr", type=float, default=1e-3, help="AdamW 学习率（默认 1e-3）")
     parser.add_argument("--weight-decay", type=float, default=1e-3, help="AdamW 权重衰减（默认 1e-3）")
-    parser.add_argument(
-        "--lr-schedule", default="cosine", choices=["none", "cosine"],
-        help="学习率调度：cosine 按 epoch 余弦衰减到 0（默认），none 恒定",
-    )
-    parser.add_argument(
-        "--select-by", default="val_loss",
-        choices=["val_loss", "eeg2text_top1", "eeg2text_top5", "text2eeg_top5"],
-        help="用哪个指标选 best checkpoint（默认 val_loss，越小越好；其余越大越好）",
-    )
+    parser.add_argument("--lr-schedule", default="cosine", choices=["none", "cosine"], help="学习率调度：cosine 按 epoch 余弦衰减到 0（默认），none 恒定")
+    parser.add_argument("--select-by", default="val_loss", choices=["val_loss", "eeg2text_top1", "eeg2text_top5", "text2eeg_top5"], help="用哪个指标选 best checkpoint（默认 val_loss，越小越好；其余越大越好）")
     parser.add_argument("--temperature", type=float, default=0.2, help="对比学习温度系数（默认 0.2）")
     parser.add_argument("--seed", type=int, default=0, help="随机种子（默认 0）")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker 数（默认 0）")
