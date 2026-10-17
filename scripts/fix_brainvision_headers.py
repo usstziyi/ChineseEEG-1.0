@@ -26,6 +26,12 @@ MNE 就会去找一个不存在的文件并抛 ``FileNotFoundError``。
     python scripts/fix_brainvision_headers.py            # 直接纠错（默认扫描 filtered_0.5_30）
     python scripts/fix_brainvision_headers.py --dry-run  # 只预览，不写回
     python scripts/fix_brainvision_headers.py --root <目录>
+
+    # filtered_0.5_80 下同样存在 ses-GranettDream 拼写错误，实跑纠错：
+    python scripts/fix_brainvision_headers.py --root datasets/ChineseEEG/derivatives/preproc/filtered_0.5_80
+
+    # 实跑前先预览 filtered_0.5_80 的改动（50 个头文件 / 54 处引用）：
+    python scripts/fix_brainvision_headers.py --root datasets/ChineseEEG/derivatives/preproc/filtered_0.5_80 --dry-run
 """
 
 from __future__ import annotations

@@ -11,14 +11,16 @@
 （GarnettDream 1 run = 1 章，LittlePrince 1 run = 4 章），
 所以 run 划分只能由这些文件的长度推出。
 
-``onset`` / ``sample`` 取自同一被试在 ``derivatives/preproc/filtered_0.5_30`` 下
-的 ``*_events.tsv``：以 CH* 事件为界分段，每段第一个 ROWS 是章节号行本身的显示
+``onset`` / ``sample`` 取自同一被试在 ``derivatives/preproc/{filter}`` 下
+的 ``*_events.tsv``（``{filter}`` 由 ``--filter`` 指定，默认 ``filtered_0.5_30``）：
+以 CH* 事件为界分段，每段第一个 ROWS 是章节号行本身的显示
 （时长仅约 0.37s），从第二个 ROWS 起才依次对应本章每个 sentence。
 
 输出
 ----
 对 ``subjects`` 里的每个被试、每本小说各出一份 CSV，命名为
-``{subject}_{novel}.csv``（如 ``sub-04_LittlePrince.csv``）。
+``{subject}_{novel}.csv``（如 ``sub-04_LittlePrince.csv``），
+放在 ``datasets/preprocessed/{filter}`` 下。
 
 处理规则
 --------
@@ -28,6 +30,19 @@
 4. ``onset`` / ``sample``：该 sentence 对应 ROWS 事件的时间与采样点；无 EEG 数据的整行丢弃。
 5. ``sentence`` 为原始折行片段，不做拼接或断句处理。
 6. ``n_chars``：非标点字符数，标点按 Unicode 类别 ``P*`` 判定。
+
+用法
+----
+    # 缺省：被试取 SUBJECTS（sub-04 sub-05），滤波版本 filtered_0.5_30
+    python scripts/extract_novel_text.py
+
+    # 只导出指定被试
+    python scripts/extract_novel_text.py --subjects sub-04
+
+    # 切换到 filtered_0.5_80：事件改从该目录读，CSV 也写到该目录下
+    python scripts/extract_novel_text.py --subjects sub-04 --filter filtered_0.5_80
+    # -> datasets/preprocessed/filtered_0.5_80/sub-04_GarnettDream.csv
+    #    datasets/preprocessed/filtered_0.5_80/sub-04_LittlePrince.csv
 """
 
 from __future__ import annotations
@@ -43,8 +58,11 @@ import openpyxl
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SEGMENTED_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/novels/segmented_novel"
-EVENTS_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30"
-OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed/novels"
+PREPROC_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc"
+PREPROCESSED_ROOT = PROJECT_ROOT / "datasets/preprocessed"
+
+FILTER_CHOICES = ["filtered_0.5_30", "filtered_0.5_80"]
+DEFAULT_FILTER = "filtered_0.5_30"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
 TEXT_COLUMN = 0  # 单列 Chinese_text
@@ -112,9 +130,9 @@ def index_events(events_path: Path) -> dict[int, list[tuple[str, str]]]:
     return {number: slots[1:] for number, slots in segments.items()}
 
 
-def build_event_lookup(subject: str, novel_name: str) -> dict[tuple[int, int], list[tuple[str, str]]]:
+def build_event_lookup(subject: str, novel_name: str, filter_name: str) -> dict[tuple[int, int], list[tuple[str, str]]]:
     """汇总该被试该小说各 run 的事件，返回 {(run, chapter): [(onset, sample), ...]}。"""
-    session_dir = EVENTS_ROOT / subject / f"ses-{novel_name}" / "eeg"
+    session_dir = PREPROC_ROOT / filter_name / subject / f"ses-{novel_name}" / "eeg"
     if not session_dir.is_dir():
         raise FileNotFoundError(f"{subject} 缺少 {session_dir.name} 目录: {session_dir}")
     events_files = sorted(
@@ -130,11 +148,11 @@ def build_event_lookup(subject: str, novel_name: str) -> dict[tuple[int, int], l
     return lookup
 
 
-def extract(novel_dir: Path, subject: str) -> tuple[list[dict], str]:
+def extract(novel_dir: Path, subject: str, filter_name: str) -> tuple[list[dict], str]:
     """整理出逐行记录，返回 (记录列表, 对齐情况备注)。"""
     lines = read_lines(novel_dir / NOVEL_FILE)
     run_lengths = read_run_lengths(novel_dir)
-    events = build_event_lookup(subject, novel_dir.name)
+    events = build_event_lookup(subject, novel_dir.name, filter_name)
 
     # 前言：首个章节号之前的内容整段跳过
     body_start = next(i for i, text in enumerate(lines) if CHAPTER_RE.match(text))
@@ -193,14 +211,15 @@ def extract(novel_dir: Path, subject: str) -> tuple[list[dict], str]:
     return records, note
 
 
-def main(subjects: list[str]) -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def main(subjects: list[str], filter_name: str) -> None:
+    output_dir = PREPROCESSED_ROOT / filter_name
+    output_dir.mkdir(parents=True, exist_ok=True)
     novel_dirs = sorted(path for path in SEGMENTED_ROOT.iterdir() if path.is_dir())
 
     for subject in subjects:
         for novel_dir in novel_dirs:
-            records, note = extract(novel_dir, subject)
-            csv_path = OUTPUT_DIR / f"{subject}_{novel_dir.name}.csv"
+            records, note = extract(novel_dir, subject, filter_name)
+            csv_path = output_dir / f"{subject}_{novel_dir.name}.csv"
             with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=FIELDS)
                 writer.writeheader()
@@ -216,9 +235,15 @@ def main(subjects: list[str]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="为指定被试导出小说逐行文本 CSV")
     parser.add_argument("--subjects", nargs="*", help="被试编号，如 sub-04 sub-05；缺省时使用 SUBJECTS")
+    parser.add_argument(
+        "--filter",
+        choices=FILTER_CHOICES,
+        default=DEFAULT_FILTER,
+        help="原始数据滤波版本，决定事件来源与输出目录；缺省时使用 filtered_0.5_30",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.subjects or SUBJECTS)
+    main(args.subjects or SUBJECTS, args.filter)
