@@ -16,10 +16,14 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pandas>=3.0.6",
     "pyprep==0.9.0",
-    "scikit-learn>=1.9.1",
+    "scikit-learn>=1.7.0",
     "scipy>=1.15.3",
     "seaborn>=0.13.2",
     "sentence-transformers>=6.1.0",
     "specparam>=2.0.0rc7",
-    "torch>=2.14.1",
+    "torch>=2.11.0",
 ]
+
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu128"
