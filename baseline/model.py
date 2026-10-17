@@ -103,7 +103,10 @@ class TokenEncoder(nn.Module):
 
         self.tsconv = nn.Sequential(
             # 时间卷积：(B·n, 1, C, T) -> (B·n, k, C, T1)
-            nn.Conv2d(in_channels=1, out_channels=k, kernel_size=(1, m1)),
+            # 唯一直接吃原始 EEG 的层，故 bias=False：有了它卷积输出就不再正比于输入，
+            # 小量纲（如 V）时会变成常量、破坏 GroupNorm 的尺度不变性，并让梯度塌掉；
+            # 每通道偏移由后续 GroupNorm 自带的可学习 beta 提供，语义更合适
+            nn.Conv2d(in_channels=1, out_channels=k, kernel_size=(1, m1), bias=False),
             # 时间平均池化：(B·n, k, C, T1) -> (B·n, k, C, T2)
             nn.AvgPool2d(kernel_size=(1, m2), stride=(1, s)),
             nn.GroupNorm(num_groups=1, num_channels=k),

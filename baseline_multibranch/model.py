@@ -95,9 +95,12 @@ class MultiScaleTemporalConv(nn.Module):
         self.branch_channels = tuple(branch_channels)
         self.branches = nn.ModuleList(
             # token 是连续 EEG 的切片，复制边界值可以避免补零带来的数值阶跃
+            # 这里是唯一直接吃原始 EEG 的层，故 bias=False：有了它输出就不再正比于输入，
+            # 小量纲（如 V）时会退化成常量、破坏 GroupNorm 的尺度不变性并让梯度塌掉；
+            # 每通道偏移由后续 GroupNorm 自带的可学习 beta 提供，语义更合适
             nn.Conv2d(
                 1, out_ch, kernel_size=(1, m), padding=(0, m // 2),
-                padding_mode="replicate",
+                padding_mode="replicate", bias=False,
             )
             for out_ch, m in zip(branch_channels, kernels)
         )
