@@ -8,7 +8,8 @@
 - ``tokens``：``torch.float32``，(n_tokens, C, TOKEN_SAMPLES)，``C = 128``
 - ``sentence``：该行原文片段
 
-注意采样值的单位沿用 MNE 的默认约定，即**伏特（V）**。
+采样值单位：MNE 默认返回**伏特（V）**，本 Dataset 读入后统一乘 ``UV_PER_VOLT``
+转成**微伏（µV）**再交给模型。
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ CSV_ROOT = PROJECT_ROOT / "datasets/preprocessed/novels"
 
 SFREQ = 256
 TASK = "task-reading"
+
+# MNE 读出的数据单位是伏特（V），乘以该系数转成微伏（µV）
+UV_PER_VOLT = 1e6
 
 # 每个 token 的采样点数
 TOKEN_SAMPLES = 100
@@ -98,6 +102,7 @@ class ReadingEEGDataset(Dataset):
 
         stop = start + n_tokens * TOKEN_SAMPLES
         data = self._raw(run).get_data(start=start, stop=stop)  # (C, n_tokens * TOKEN_SAMPLES)
+        data = data * UV_PER_VOLT  # MNE 默认返回伏特（V），这里转成微伏（µV）
 
         tokens = data.reshape(data.shape[0], n_tokens, TOKEN_SAMPLES).transpose(1, 0, 2)
         return torch.from_numpy(tokens.astype(np.float32)), str(row["sentence"])
