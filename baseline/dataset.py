@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, Dataset
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EEG_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30"
-CSV_ROOT = PROJECT_ROOT / "datasets/preprocessed/novels"
+CSV_ROOT = PROJECT_ROOT / "datasets/preprocessed/filtered_0.5_30"
 
 SFREQ = 256
 TASK = "task-reading"

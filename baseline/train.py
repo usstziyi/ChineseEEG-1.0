@@ -10,8 +10,9 @@
 
 数据
 ----
-句子来自 ``datasets/preprocessed/novels/{subject}_{novel}.csv``，EEG 来自
-``datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30`` 下的 BrainVision 文件。
+句子来自 ``datasets/preprocessed/{filter}/{subject}_{novel}.csv``，EEG 来自
+``datasets/ChineseEEG/derivatives/preproc/{filter}`` 下的 BrainVision 文件，
+``{filter}`` 由 ``--filter`` 指定（默认 ``filtered_0.5_30``）。
 train / val 按 **句子** 切分（不是按样本），保证两侧句子集合完全不相交。
 
 损失
@@ -39,6 +40,7 @@ train / val 按 **句子** 切分（不是按样本），保证两侧句子集�
     uv run python baseline/train.py
     uv run python baseline/train.py --subject sub-04 --novel LittlePrince
     uv run python baseline/train.py --subject sub-04 --novel GarnettDream --epochs 20 --batch-size 64
+    uv run python baseline/train.py --subject sub-04 --novel LittlePrince --filter filtered_0.5_80
 """
 
 from __future__ import annotations
@@ -66,6 +68,18 @@ from baseline.text_encoder import LaBSETextEncoder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = PROJECT_ROOT / "outputs" / "baseline"
+
+# 数据源滤波版本：EEG 与 CSV 必须同源，用同一个名字切换
+FILTER_CHOICES = ["filtered_0.5_30", "filtered_0.5_80"]
+DEFAULT_FILTER = "filtered_0.5_30"
+
+
+def filter_roots(filter_name: str) -> tuple[Path, Path]:
+    """按滤波版本推导 ``(EEG 根目录, CSV 根目录)``，两者必须同源。"""
+    return (
+        PROJECT_ROOT / f"datasets/ChineseEEG/derivatives/preproc/{filter_name}",
+        PROJECT_ROOT / f"datasets/preprocessed/{filter_name}",
+    )
 
 # train_epochs.csv 每轮追加一行，字段顺序即表头顺序
 EPOCH_LOG_FIELDS = [
@@ -259,6 +273,7 @@ def parse_args():
     parser.add_argument("--subject", default="sub-04", help="被试编号，如 sub-04（默认 sub-04）")
     parser.add_argument("--novel", default="LittlePrince", help="小说名，如 LittlePrince（默认 LittlePrince）")
     parser.add_argument("--min-chars", type=int, default=4, help="只保留 n_chars >= 该值的句子（默认 4）")
+    parser.add_argument("--filter", default=DEFAULT_FILTER, choices=FILTER_CHOICES, help="数据源滤波版本，决定 EEG 与 CSV 来源（默认 filtered_0.5_30）")
     parser.add_argument("--val-ratio", type=float, default=0.2, help="验证集句子比例（默认 0.2）")
     parser.add_argument("--batch-size", type=int, default=64, help="batch 大小（默认 64）")
     parser.add_argument("--epochs", type=int, default=30, help="训练轮数（默认 30）")
@@ -282,6 +297,7 @@ def main():
         args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     )
     print(f"[Config] device={device} subject={args.subject} novel={args.novel} "
+          f"filter={args.filter} "
           f"batch={args.batch_size} epochs={args.epochs} lr={args.lr} "
           f"wd={args.weight_decay} schedule={args.lr_schedule} "
           f"select={args.select_by} temperature={args.temperature} seed={args.seed}")
@@ -291,8 +307,10 @@ def main():
     dump_args_json(args, out_dir)
 
     # ---------------- 数据 ----------------
+    eeg_root, csv_root = filter_roots(args.filter)
     dataset = ReadingEEGDataset(
-        args.subject, args.novel, min_chars=args.min_chars
+        args.subject, args.novel, min_chars=args.min_chars,
+        eeg_root=eeg_root, csv_root=csv_root,
     )
     first_tokens, _ = dataset[0]  # 触发一次读取，确定通道数 / token 长度
     n_chans, token_samples = first_tokens.shape[1], first_tokens.shape[2]
