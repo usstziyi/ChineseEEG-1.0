@@ -2,7 +2,7 @@
 
 与 baseline 方案的唯一区别在 token 的时间前端：
 
-    baseline                          multibranch_baseline
+    baseline                          baseline_multibranch
     Conv(1→32, 1×9) + AvgPool(13, 2)   Conv(1→8, 1×3/7/15/29) 四支并行 + AvgPool(5, 3)
 
 四支的核宽按 token 长度等比例取自 ``char_token_window`` 的 5/15/35/75：
@@ -30,7 +30,7 @@ Linear → L2）以及 Transformer + attention pooling 与 baseline 完全一致
 
 用法::
 
-    from multibranch_baseline.model import MultiBranchReadingEEGEncoder
+    from baseline_multibranch.model import MultiBranchReadingEEGEncoder
 
     model = MultiBranchReadingEEGEncoder(n_chans=128, token_samples=100, embedding_dim=768)
     eeg = model(tokens, mask)      # tokens: (B, n, 128, 100)；mask: (B, n) bool
@@ -220,7 +220,7 @@ class MultiBranchReadingEEGEncoder(nn.Module):
     Parameters
     ----------
     n_chans / token_samples:
-        必须与 ``multibranch_baseline.dataset.ReadingEEGDataset`` 的输出一致（默认 128 / 100）。
+        必须与 ``baseline_multibranch.dataset.ReadingEEGDataset`` 的输出一致（默认 128 / 100）。
     d_model:
         token 空间与 Transformer 的宽度。
     n_heads / n_layers / dim_feedforward / dropout:

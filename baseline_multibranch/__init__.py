@@ -9,5 +9,5 @@
 
 运行::
 
-    uv run python multibranch_baseline/train.py
+    uv run python baseline_multibranch/train.py
 """

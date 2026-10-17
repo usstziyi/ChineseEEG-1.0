@@ -35,12 +35,12 @@ train / val 按 **句子** 切分（不是按样本），保证两侧句子集�
 
 用法::
 
-    uv run python multibranch_baseline/train.py
-    uv run python multibranch_baseline/train.py --subject sub-04 --novel LittlePrince
-    uv run python multibranch_baseline/train.py --subject sub-04 --novel GarnettDream --epochs 20 --batch-size 64
+    uv run python baseline_multibranch/train.py
+    uv run python baseline_multibranch/train.py --subject sub-04 --novel LittlePrince
+    uv run python baseline_multibranch/train.py --subject sub-04 --novel GarnettDream --epochs 20 --batch-size 64
     # 消融：换核宽组合 / 池化
-    uv run python multibranch_baseline/train.py --kernels 5 15 35
-    uv run python multibranch_baseline/train.py --kernels 9 --m2 13 --s 2
+    uv run python baseline_multibranch/train.py --kernels 5 15 35
+    uv run python baseline_multibranch/train.py --kernels 9 --m2 13 --s 2
 """
 
 from __future__ import annotations
@@ -58,16 +58,16 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
-# 支持 `python multibranch_baseline/train.py` 直接执行（此时 sys.path 不含项目根目录）
+# 支持 `python baseline_multibranch/train.py` 直接执行（此时 sys.path 不含项目根目录）
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from multibranch_baseline.dataset import ReadingEEGDataset, pad_collate
-from multibranch_baseline.model import DEFAULT_KERNELS, MultiBranchReadingEEGEncoder
-from multibranch_baseline.text_encoder import LaBSETextEncoder
+from baseline_multibranch.dataset import ReadingEEGDataset, pad_collate
+from baseline_multibranch.model import DEFAULT_KERNELS, MultiBranchReadingEEGEncoder
+from baseline_multibranch.text_encoder import LaBSETextEncoder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUT_DIR = PROJECT_ROOT / "outputs" / "multibranch_baseline"
+DEFAULT_OUT_DIR = PROJECT_ROOT / "outputs" / "baseline_multibranch"
 
 # train_epochs.csv 每轮追加一行，字段顺序即表头顺序
 EPOCH_LOG_FIELDS = [
@@ -258,7 +258,7 @@ def evaluate(model, loader, lookup, device, temperature) -> dict:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="multibranch_baseline：多分支时间滤波的 EEG–文本对比学习。"
+        description="baseline_multibranch：多分支时间滤波的 EEG–文本对比学习。"
     )
     parser.add_argument("--subject", default="sub-04", help="被试编号，如 sub-04（默认 sub-04）")
     parser.add_argument("--novel", default="LittlePrince", help="小说名，如 LittlePrince（默认 LittlePrince）")

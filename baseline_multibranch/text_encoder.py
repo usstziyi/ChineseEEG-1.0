@@ -1,6 +1,6 @@
 """LaBSE 文本编码器：句子 -> 定长、L2 归一化的 embedding（多分支实验自包含版本）。
 
-与 EEG 侧（``multibranch_baseline/model.py``）配合的方式：两边输出都做 L2 归一化后，
+与 EEG 侧（``baseline_multibranch/model.py``）配合的方式：两边输出都做 L2 归一化后，
 点积即余弦相似度。
 
     sentence (list[str], 长度 B)
@@ -24,7 +24,7 @@
 
 用法::
 
-    from multibranch_baseline.text_encoder import LaBSETextEncoder
+    from baseline_multibranch.text_encoder import LaBSETextEncoder
 
     encoder = LaBSETextEncoder()
     text = encoder(["我六岁那年，在一本描写"])   # (1, 768)
