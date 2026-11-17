@@ -4,16 +4,18 @@
 ``sample`` 为起点，连续切出 ``n_chars`` 个 token，每个 token 固定
 ``TOKEN_SAMPLES = 100`` 个采样点（256 Hz 下约 0.39 s，对应一个汉字）。
 
-``__getitem__`` 返回 ``(tokens, mask, sentence)``：
+``__getitem__`` 返回 ``(tokens, mask, sentence, run, chapter)``：
 
 - ``tokens``：``torch.float32``，``(n_chars, 128, 100)``，单位**微伏（µV）**；
 - ``mask``：``torch.bool``，``(n_chars,)``，全部为 ``True``（真实 token；
   batch 内的补齐在 ``pad_collate`` 阶段才产生）；
-- ``sentence``：该行原文片段。
+- ``sentence``：该行原文片段；
+- ``run``：该句所属 EEG 采集轮次（``int``，对应 ``run-{run:02d}`` 文件）；
+- ``chapter``：该句所属章节号（``int``，来自 CSV）。
 
-``pad_collate`` 把若干样本拼成 ``(tokens, mask, sentences)``：
-tokens ``(B, 10, 128, 100)``、mask ``(B, 10)``、sentences ``list[str]``，
-与历史 ``baseline/train.py`` 的 loader 输出完全一致。
+``pad_collate`` 把若干样本拼成 ``(tokens, mask, sentences, runs, chapters)``：
+tokens ``(B, 10, 128, 100)``、mask ``(B, 10)``、sentences ``list[str]``、
+runs/chapters ``(B,)`` int64。
 
 单位换算
 --------
@@ -380,6 +382,8 @@ class ReadingEEGDataset(Dataset):
             torch.from_numpy(np.ascontiguousarray(tokens)),
             torch.ones(n_chars, dtype=torch.bool),
             str(row["sentence"]),
+            run,
+            int(row["chapter"]),
         )
 
     def close(self) -> None:
@@ -390,18 +394,21 @@ class ReadingEEGDataset(Dataset):
         self._signals.clear()
 
 
-def pad_collate(batch: list[tuple[torch.Tensor, torch.Tensor, str]]):
-    """把 ``(tokens, mask, sentence)`` 列表拼成定长 batch。
+def pad_collate(
+    batch: list[tuple[torch.Tensor, torch.Tensor, str, int, int]]
+):
+    """把 ``(tokens, mask, sentence, run, chapter)`` 列表拼成定长 batch。
 
     句子长度（``n_chars``）在 1~10 之间浮动，这里统一按右侧补零对齐到
     ``MAX_TOKENS``。
 
     Returns:
-        ``(tokens, mask, sentences)``
+        ``(tokens, mask, sentences, runs, chapters)``
 
         - ``tokens``：``(B, MAX_TOKENS, 128, TOKEN_SAMPLES)``，float32，µV
         - ``mask``：``(B, MAX_TOKENS)``，bool，True 表示真实 token
         - ``sentences``：长度 ``B`` 的 ``list[str]``
+        - ``runs`` / ``chapters``：``(B,)`` int64
     """
     n_samples = len(batch)
     n_channels = batch[0][0].shape[1]
@@ -411,8 +418,10 @@ def pad_collate(batch: list[tuple[torch.Tensor, torch.Tensor, str]]):
     )
     mask = torch.zeros(n_samples, MAX_TOKENS, dtype=torch.bool)
     sentences: list[str] = []
+    runs = torch.empty(n_samples, dtype=torch.long)
+    chapters = torch.empty(n_samples, dtype=torch.long)
 
-    for i, (item, item_mask, sentence) in enumerate(batch):
+    for i, (item, item_mask, sentence, run, chapter) in enumerate(batch):
         length = item.shape[0]
         if length > MAX_TOKENS:
             raise ValueError(f"样本 token 数 {length} 超过 MAX_TOKENS={MAX_TOKENS}")
@@ -423,8 +432,10 @@ def pad_collate(batch: list[tuple[torch.Tensor, torch.Tensor, str]]):
         tokens[i, :length] = item
         mask[i, :length] = item_mask
         sentences.append(sentence)
+        runs[i] = run
+        chapters[i] = chapter
 
-    return tokens, mask, sentences
+    return tokens, mask, sentences, runs, chapters
 
 
 def main() -> None:
@@ -435,20 +446,22 @@ def main() -> None:
         dataset = ReadingEEGDataset(subject, novel)
         datasets.append(dataset)
 
-        tokens, mask, sentence = dataset[0]
+        tokens, mask, sentence, run, chapter = dataset[0]
         print(
             f"{subject} {novel:<14} {len(dataset):>5} 条 | "
             f"首条 {tuple(tokens.shape)} {tokens.dtype} | "
+            f"run={run} chapter={chapter} | "
             f"µV 范围 [{tokens.min():.1f}, {tokens.max():.1f}] | {sentence!r}"
         )
         print(f"  过滤统计: {dataset.stats}")
 
     first = datasets[0]
     loader = DataLoader(first, batch_size=4, collate_fn=pad_collate)
-    tokens, mask, sentences = next(iter(loader))
+    tokens, mask, sentences, runs, chapters = next(iter(loader))
     print(f"\n{first.subject} {first.novel} 取一个 batch (batch_size=4):")
     print(f"  tokens {tuple(tokens.shape)} {tokens.dtype}")
     print(f"  mask   {tuple(mask.shape)} {mask.dtype} -> 每条真实 token 数 {mask.sum(dim=1).tolist()}")
+    print(f"  run    {runs.tolist()}  chapter {chapters.tolist()}")
     print(f"  text   {sentences}")
 
     for dataset in datasets:
