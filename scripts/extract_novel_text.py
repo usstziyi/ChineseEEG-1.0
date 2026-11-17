@@ -11,7 +11,7 @@
 （GarnettDream 1 run = 1 章，LittlePrince 1 run = 4 章），
 所以 run 划分只能由这些文件的长度推出。
 
-``onset`` / ``sample`` 取自同一被试在 ``derivatives/preproc/filtered_0.5_30`` 下
+``onset`` / ``sample`` 取自同一被试在 ``derivatives/preproc/filtered_0.5_80`` 下
 的 ``*_events.tsv``：以 CH* 事件为界分段，每段第一个 ROWS 是章节号行本身的显示
 （时长仅约 0.37s），从第二个 ROWS 起才依次对应本章每个 sentence。
 
@@ -43,7 +43,7 @@ import openpyxl
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SEGMENTED_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/novels/segmented_novel"
-EVENTS_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30"
+EVENTS_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_80"
 OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed/novels"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
