@@ -1,23 +1,22 @@
 """ChineseEEG 阅读任务的句子级 EEG Dataset（直接读 BrainVision，不落盘）。
 
 每个样本对应 ``datasets/preprocessed/{subject}_{novel}.csv`` 的一行：以该行的
-``sample`` 为起点，连续切出 ``n_chars`` 个 token，每个 token 固定
-``TOKEN_SAMPLES = 100`` 个采样点（256 Hz 下约 0.39 s，对应一个汉字）。
+``sample`` 为起点，连续切出 ``n_chars`` 个汉字对应的窗口，每个汉字固定
+``SAMPLES_PER_CHAR = 100`` 个采样点（256 Hz 下约 0.39 s）。
 
-``__getitem__`` 返回 ``(tokens, mask, sentence, run, chapter, day)``：
+``__getitem__`` 返回 ``(eeg, sentence, run, chapter, day)``：
 
-- ``tokens``：``torch.float32``，``(n_chars, 128, 100)``，单位**微伏（µV）**；
-- ``mask``：``torch.bool``，``(n_chars,)``，全部为 ``True``（真实 token；
-  batch 内的补齐在 ``pad_collate`` 阶段才产生）；
+- ``eeg``：``torch.float32``，``(128, T)``，单位**微伏（µV）**，其中
+  ``T = n_chars * SAMPLES_PER_CHAR``；``n_chars_exact=10`` 时恒为
+  ``(128, 1000)``；
 - ``sentence``：该行原文片段；
 - ``run``：该句所属 EEG 采集轮次（``int``，对应 ``run-{run:02d}`` 文件）；
 - ``chapter``：该句所属章节号（``int``，来自 CSV）；
 - ``day``：该句所属采集日（``int``，来自 CSV 的 ``day`` 列）。
 
-``pad_collate`` 把若干样本拼成
-``(tokens, mask, sentences, runs, chapters, days)``：
-tokens ``(B, 10, 128, 100)``、mask ``(B, 10)``、sentences ``list[str]``、
-runs/chapters/days ``(B,)`` int64。
+``collate`` 直接 stack 成 ``(eeg, sentences, runs, chapters, days)``：
+eeg ``(B, 128, T)``、sentences ``list[str]``、
+runs/chapters/days ``(B,)`` int64。**没有 mask**（数据已定长，无需补齐）。
 
 day 字段
 --------
@@ -61,14 +60,23 @@ CSV 首列是 ``day``（整数字符串）。构造期把它和 ``run``、``chap
 
 用法::
 
-    from baseline.dataset import ReadingEEGDataset, pad_collate
+    from baseline.dataset import ReadingEEGDataset, collate
 
-    ds = ReadingEEGDataset("sub-04", "GarnettDream")
-    tokens, mask, sentence, run, chapter, day = ds[0]
-    # tokens (n_chars, 128, 100) float32 µV, mask (n_chars,) bool
+    ds = ReadingEEGDataset("sub-04", "GarnettDream", n_chars_exact=10)
+    eeg, sentence, run, chapter, day = ds[0]
+    # eeg (128, 1000) float32 µV
 
-    loader = DataLoader(ds, batch_size=64, collate_fn=pad_collate, shuffle=True)
-    tokens, mask, sentences, runs, chapters, days = next(iter(loader))
+    loader = DataLoader(ds, batch_size=64, collate_fn=collate, shuffle=True)
+    eeg, sentences, runs, chapters, days = next(iter(loader))
+
+定长与 mask
+-----------
+去掉 mask 后所有样本必须是同一长度，因此推荐显式传 ``n_chars_exact=10``
+（256 Hz 下 10 字 ≈ 1060 点，固定取 1000 点落在句子内部）。此时
+``__getitem__`` 返回的 eeg 恒为 ``(128, 1000)``，batch 为
+``(B, 128, 1000)``，既不需要补齐也不需要 attention mask。模型侧
+（本仓库尚未实现）输入按 ``(B, C, T)`` 处理，不应再传
+``src_key_padding_mask``，attention pooling 也不需要按字切分的 mask。
 """
 
 from __future__ import annotations
@@ -76,6 +84,7 @@ from __future__ import annotations
 import csv
 import re
 import warnings
+from collections import Counter
 from pathlib import Path
 
 import mne
@@ -94,10 +103,10 @@ SFREQ = 256.0
 N_CHANNELS = 128
 CHANNEL_NAMES = tuple(f"E{i}" for i in range(1, N_CHANNELS + 1))
 
-# 每个 token 的采样点数：100 点 ≈ 0.39 s
-TOKEN_SAMPLES = 100
-# n_chars 的实测上限（1~10），也是 batch 内 token 维度的补齐目标
-MAX_TOKENS = 10
+# 每个汉字对应的采样点数：100 点 ≈ 0.39 s
+SAMPLES_PER_CHAR = 100
+# n_chars 的实测上限（1~10）
+MAX_CHARS = 10
 # MNE 返回伏特，乘以该系数转成微伏
 UV_PER_VOLT = 1e6
 
@@ -120,6 +129,10 @@ class ReadingEEGDataset(Dataset):
         csv_root: ``extract_novel_text.py`` 输出的 CSV 目录。
         preload: True 时把用到的 run 整段读入内存（快，占内存）；
             False 时每次从磁盘切片（省内存，约 2 ms/样本）。
+        n_chars_exact: 只保留 ``n_chars == n_chars_exact`` 的句子（默认
+            ``None`` 表示不做长度过滤）。设为 10 时样本恒为
+            ``(128, 1000)``；为 ``None`` 时要求过滤后所有句子长度一致，
+            否则报错并列出 CSV 行号。
 
     Attributes:
         rows: 过滤后的 CSV 行（``dict``，保留原始字符串值，另加 ``_line``
@@ -127,7 +140,10 @@ class ReadingEEGDataset(Dataset):
         days: 与 ``rows`` 对齐的采集日数组（``np.ndarray``，int64），
             可直接做 leave-one-day-out 的分组向量。
         day_ids: 升序去重后的采集日列表，如 ``[1, 2, 3, 4, 5, 6]``。
-        stats: 过滤统计（``n_rows`` / ``n_dropped_min_chars`` / ``n_dropped_dup``）。
+        chars_per_sample: 每个样本包含的汉字数（定长）；``eeg`` 的时间维长度
+            为 ``chars_per_sample * SAMPLES_PER_CHAR``。
+        stats: 过滤统计（``n_rows`` / ``n_dropped_min_chars`` /
+            ``n_dropped_n_chars`` / ``n_dropped_dup`` / ``n_chars_exact``）。
     """
 
     def __init__(
@@ -139,6 +155,7 @@ class ReadingEEGDataset(Dataset):
         eeg_root: Path = EEG_ROOT,
         csv_root: Path = CSV_ROOT,
         preload: bool = True,
+        n_chars_exact: int | None = None,
     ):
         self.subject = subject
         self.novel = novel
@@ -146,6 +163,11 @@ class ReadingEEGDataset(Dataset):
         self.min_chars = min_chars
         self.dedup = dedup
         self.preload = preload
+        if n_chars_exact is not None and not 1 <= int(n_chars_exact) <= MAX_CHARS:
+            raise ValueError(
+                f"n_chars_exact={n_chars_exact} 超出范围 [1, {MAX_CHARS}]"
+            )
+        self.n_chars_exact = None if n_chars_exact is None else int(n_chars_exact)
 
         self.eeg_dir = Path(eeg_root) / subject / self.session / "eeg"
         self.csv_path = Path(csv_root) / f"{subject}_{novel}.csv"
@@ -167,7 +189,8 @@ class ReadingEEGDataset(Dataset):
         if not self.rows:
             raise ValueError(
                 f"{subject}/{novel}: 过滤后没有样本"
-                f"（min_chars={min_chars}, dedup={dedup}）"
+                f"（min_chars={min_chars}, dedup={dedup}, "
+                f"n_chars_exact={self.n_chars_exact}）"
             )
         self.days = np.array([int(row["day"]) for row in self.rows], dtype=np.int64)
         self.day_ids = sorted(set(self.days.tolist()))
@@ -185,14 +208,24 @@ class ReadingEEGDataset(Dataset):
         return rows
 
     def _filter_rows(self, raw_rows: list[dict]) -> list[dict]:
-        """按 min_chars 过滤、按句子去重，并记录统计信息。"""
+        """按 min_chars / n_chars_exact 过滤、按句子去重，并记录统计信息。
+
+        ``n_chars_exact`` 非空时只保留该长度的句子；为空时不做长度过滤，但要求
+        过滤后所有句子的长度一致（去掉 mask 后无法容纳变长样本），否则报错并
+        列出行号。
+        """
         rows: list[dict] = []
         seen: set[str] = set()
         dropped_short = 0
         dropped_dup = 0
+        dropped_length = 0
         for row in raw_rows:
-            if int(row["n_chars"]) < self.min_chars:
+            n_chars = int(row["n_chars"])
+            if n_chars < self.min_chars:
                 dropped_short += 1
+                continue
+            if self.n_chars_exact is not None and n_chars != self.n_chars_exact:
+                dropped_length += 1
                 continue
             if self.dedup and row["sentence"] in seen:
                 dropped_dup += 1
@@ -200,10 +233,29 @@ class ReadingEEGDataset(Dataset):
             seen.add(row["sentence"])
             rows.append(row)
 
+        if self.n_chars_exact is not None:
+            self.chars_per_sample = self.n_chars_exact
+        elif rows:
+            counts = Counter(int(row["n_chars"]) for row in rows)
+            self.chars_per_sample, _ = counts.most_common(1)[0]
+            mismatched = [row for row in rows if int(row["n_chars"]) != self.chars_per_sample]
+            if mismatched:
+                examples = "\n".join(
+                    f"  {self.csv_path.name}:{row['_line']} n_chars={row['n_chars']}"
+                    for row in mismatched[:5]
+                )
+                raise ValueError(
+                    f"{self.subject}/{self.novel}: 去掉 mask 后要求所有样本定长，"
+                    f"但过滤后存在长度 {sorted(counts)}；"
+                    f"请显式传 n_chars_exact={self.chars_per_sample}\n{examples}"
+                )
+
         self.stats = {
             "n_rows": len(rows),
             "n_dropped_min_chars": dropped_short,
+            "n_dropped_n_chars": dropped_length,
             "n_dropped_dup": dropped_dup,
+            "n_chars_exact": self.n_chars_exact,
         }
         return rows
 
@@ -280,16 +332,16 @@ class ReadingEEGDataset(Dataset):
                     onset = float(row["onset"])
                     where = f"{self.csv_path.name}:{row['_line']} (run {run:02d})"
 
-                    if not 1 <= n_chars <= MAX_TOKENS:
+                    if not 1 <= n_chars <= MAX_CHARS:
                         issues.append(
-                            f"{where}: n_chars={n_chars} 超出 [1, {MAX_TOKENS}]"
+                            f"{where}: n_chars={n_chars} 超出 [1, {MAX_CHARS}]"
                         )
                     elif sample < 0:
                         issues.append(f"{where}: sample={sample} 为负")
-                    elif sample + n_chars * TOKEN_SAMPLES > n_times:
+                    elif sample + n_chars * SAMPLES_PER_CHAR > n_times:
                         issues.append(
                             f"{where}: sample={sample} 起需要 "
-                            f"{n_chars * TOKEN_SAMPLES} 点，超出 run 长度 {n_times}"
+                            f"{n_chars * SAMPLES_PER_CHAR} 点，超出 run 长度 {n_times}"
                         )
 
                     if sample <= last_sample:
@@ -382,21 +434,24 @@ class ReadingEEGDataset(Dataset):
         run = int(row["run"])
         start = int(row["sample"])
         n_chars = int(row["n_chars"])
-        stop = start + n_chars * TOKEN_SAMPLES
+        if n_chars != self.chars_per_sample:
+            raise RuntimeError(
+                f"样本长度不一致: n_chars={n_chars} != chars_per_sample={self.chars_per_sample}"
+                f"（{self.csv_path.name}:{row['_line']}）"
+            )
+        stop = start + n_chars * SAMPLES_PER_CHAR
 
         segment = self._segment(run, start, stop)
-        expected = (N_CHANNELS, n_chars * TOKEN_SAMPLES)
+        expected = (N_CHANNELS, self.chars_per_sample * SAMPLES_PER_CHAR)
         if segment.shape != expected:
             raise RuntimeError(
                 f"切片形状异常: {segment.shape} != {expected}"
                 f"（{self.csv_path.name}:{row['_line']}）"
             )
 
-        # (C, n, T) -> (n, C, T)
-        tokens = segment.reshape(N_CHANNELS, n_chars, TOKEN_SAMPLES).transpose(1, 0, 2)
+        # 直接返回 (128, n*100)：10 个字的窗口按时间顺序首尾相接
         return (
-            torch.from_numpy(np.ascontiguousarray(tokens)),
-            torch.ones(n_chars, dtype=torch.bool),
+            torch.from_numpy(np.ascontiguousarray(segment)),
             str(row["sentence"]),
             run,
             int(row["chapter"]),
@@ -411,50 +466,32 @@ class ReadingEEGDataset(Dataset):
         self._signals.clear()
 
 
-def pad_collate(
-    batch: list[tuple[torch.Tensor, torch.Tensor, str, int, int, int]]
-):
-    """把 ``(tokens, mask, sentence, run, chapter, day)`` 列表拼成定长 batch。
+def collate(batch: list[tuple[torch.Tensor, str, int, int, int]]):
+    """把 ``(eeg, sentence, run, chapter, day)`` 列表拼成定长 batch。
 
-    句子长度（``n_chars``）在 1~10 之间浮动，这里统一按右侧补零对齐到
-    ``MAX_TOKENS``。
+    数据集保证所有样本同为 ``(128, chars_per_sample * 100)``，因此这里只做 stack，
+    没有补齐，也没有 mask。
 
     Returns:
-        ``(tokens, mask, sentences, runs, chapters, days)``
+        ``(eeg, sentences, runs, chapters, days)``
 
-        - ``tokens``：``(B, MAX_TOKENS, 128, TOKEN_SAMPLES)``，float32，µV
-        - ``mask``：``(B, MAX_TOKENS)``，bool，True 表示真实 token
+        - ``eeg``：``(B, 128, chars_per_sample * 100)``，float32，µV
         - ``sentences``：长度 ``B`` 的 ``list[str]``
         - ``runs`` / ``chapters`` / ``days``：``(B,)`` int64
     """
-    n_samples = len(batch)
-    n_channels = batch[0][0].shape[1]
-
-    tokens = torch.zeros(
-        n_samples, MAX_TOKENS, n_channels, TOKEN_SAMPLES, dtype=torch.float32
+    shapes = {tuple(item[0].shape) for item in batch}
+    if len(shapes) != 1:
+        raise ValueError(
+            f"batch 内样本形状不一致: {sorted(shapes)}；"
+            "数据集应通过 n_chars_exact 固定每句字数"
+        )
+    return (
+        torch.stack([item[0] for item in batch]),
+        [item[1] for item in batch],
+        torch.tensor([item[2] for item in batch], dtype=torch.long),
+        torch.tensor([item[3] for item in batch], dtype=torch.long),
+        torch.tensor([item[4] for item in batch], dtype=torch.long),
     )
-    mask = torch.zeros(n_samples, MAX_TOKENS, dtype=torch.bool)
-    sentences: list[str] = []
-    runs = torch.empty(n_samples, dtype=torch.long)
-    chapters = torch.empty(n_samples, dtype=torch.long)
-    days = torch.empty(n_samples, dtype=torch.long)
-
-    for i, (item, item_mask, sentence, run, chapter, day) in enumerate(batch):
-        length = item.shape[0]
-        if length > MAX_TOKENS:
-            raise ValueError(f"样本 token 数 {length} 超过 MAX_TOKENS={MAX_TOKENS}")
-        if item.shape[1] != n_channels:
-            raise ValueError(
-                f"batch 内通道数不一致: {item.shape[1]} != {n_channels}"
-            )
-        tokens[i, :length] = item
-        mask[i, :length] = item_mask
-        sentences.append(sentence)
-        runs[i] = run
-        chapters[i] = chapter
-        days[i] = day
-
-    return tokens, mask, sentences, runs, chapters, days
 
 
 def main() -> None:
@@ -462,15 +499,15 @@ def main() -> None:
     datasets: list[ReadingEEGDataset] = []
     for csv_path in sorted(CSV_ROOT.glob("*.csv")):
         subject, novel = csv_path.stem.split("_", 1)
-        dataset = ReadingEEGDataset(subject, novel)
+        dataset = ReadingEEGDataset(subject, novel, n_chars_exact=10)
         datasets.append(dataset)
 
-        tokens, mask, sentence, run, chapter, day = dataset[0]
+        eeg, sentence, run, chapter, day = dataset[0]
         print(
             f"{subject} {novel:<14} {len(dataset):>5} 条 | "
-            f"首条 {tuple(tokens.shape)} {tokens.dtype} | "
+            f"首条 {tuple(eeg.shape)} {eeg.dtype} | "
             f"day={day} run={run} chapter={chapter} | "
-            f"µV 范围 [{tokens.min():.1f}, {tokens.max():.1f}] | {sentence!r}"
+            f"µV 范围 [{eeg.min():.1f}, {eeg.max():.1f}] | {sentence!r}"
         )
         print(f"  过滤统计: {dataset.stats}")
         print(
@@ -479,11 +516,10 @@ def main() -> None:
         )
 
     first = datasets[0]
-    loader = DataLoader(first, batch_size=4, collate_fn=pad_collate)
-    tokens, mask, sentences, runs, chapters, days = next(iter(loader))
+    loader = DataLoader(first, batch_size=4, collate_fn=collate)
+    eeg, sentences, runs, chapters, days = next(iter(loader))
     print(f"\n{first.subject} {first.novel} 取一个 batch (batch_size=4):")
-    print(f"  tokens {tuple(tokens.shape)} {tokens.dtype}")
-    print(f"  mask   {tuple(mask.shape)} {mask.dtype} -> 每条真实 token 数 {mask.sum(dim=1).tolist()}")
+    print(f"  eeg    {tuple(eeg.shape)} {eeg.dtype}")
     print(f"  day {days.tolist()}  run {runs.tolist()}  chapter {chapters.tolist()}")
     print(f"  text   {sentences}")
 
