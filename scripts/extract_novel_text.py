@@ -18,7 +18,8 @@
 输出
 ----
 对 ``subjects`` 里的每个被试、每本小说各出一份 CSV，命名为
-``{subject}_{novel}.csv``（如 ``sub-04_LittlePrince.csv``）。
+``{subject}_{novel}.csv``（如 ``sub-04_LittlePrince.csv``）。命令行未指定
+被试时，自动遍历 ``filtered_0.5_80`` 下所有 ``sub-*`` 目录。
 
 处理规则
 --------
@@ -48,9 +49,8 @@ OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed/novels"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
 TEXT_COLUMN = 0  # 单列 Chinese_text
-FIELDS = ["index", "chapter", "run", "sentence", "n_chars", "onset", "sample"]
+FIELDS = ["run", "chapter", "sentence", "n_chars", "onset", "sample"]
 
-SUBJECTS = ["sub-04", "sub-05"]
 TASK = "task-reading"
 
 CHAPTER_RE = re.compile(r"^\d+$")
@@ -110,6 +110,11 @@ def index_events(events_path: Path) -> dict[int, list[tuple[str, str]]]:
         elif chapter is not None and event["trial_type"] == "ROWS":
             segments[chapter].append((event["onset"], event["sample"]))
     return {number: slots[1:] for number, slots in segments.items()}
+
+
+def discover_subjects() -> list[str]:
+    """遍历 filtered_0.5_80，返回所有以 sub- 开头的被试目录名。"""
+    return sorted(path.name for path in EVENTS_ROOT.iterdir() if path.is_dir() and path.name.startswith("sub-"))
 
 
 def build_event_lookup(subject: str, novel_name: str) -> dict[tuple[int, int], list[tuple[str, str]]]:
@@ -172,7 +177,6 @@ def extract(novel_dir: Path, subject: str) -> tuple[list[dict], str]:
         onset, sample = slots[position]
         records.append(
             {
-                "index": len(records),
                 "chapter": chapter,
                 "run": run,
                 "onset": onset,
@@ -215,10 +219,10 @@ def main(subjects: list[str]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="为指定被试导出小说逐行文本 CSV")
-    parser.add_argument("--subjects", nargs="*", help="被试编号，如 sub-04 sub-05；缺省时使用 SUBJECTS")
+    parser.add_argument("--subjects", nargs="*", help="被试编号，如 sub-04 sub-05；缺省时遍历 filtered_0.5_80 下的全部被试")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.subjects or SUBJECTS)
+    main(args.subjects or discover_subjects())
