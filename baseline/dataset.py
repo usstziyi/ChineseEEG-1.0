@@ -4,18 +4,26 @@
 ``sample`` 为起点，连续切出 ``n_chars`` 个 token，每个 token 固定
 ``TOKEN_SAMPLES = 100`` 个采样点（256 Hz 下约 0.39 s，对应一个汉字）。
 
-``__getitem__`` 返回 ``(tokens, mask, sentence, run, chapter)``：
+``__getitem__`` 返回 ``(tokens, mask, sentence, run, chapter, day)``：
 
 - ``tokens``：``torch.float32``，``(n_chars, 128, 100)``，单位**微伏（µV）**；
 - ``mask``：``torch.bool``，``(n_chars,)``，全部为 ``True``（真实 token；
   batch 内的补齐在 ``pad_collate`` 阶段才产生）；
 - ``sentence``：该行原文片段；
 - ``run``：该句所属 EEG 采集轮次（``int``，对应 ``run-{run:02d}`` 文件）；
-- ``chapter``：该句所属章节号（``int``，来自 CSV）。
+- ``chapter``：该句所属章节号（``int``，来自 CSV）；
+- ``day``：该句所属采集日（``int``，来自 CSV 的 ``day`` 列）。
 
-``pad_collate`` 把若干样本拼成 ``(tokens, mask, sentences, runs, chapters)``：
+``pad_collate`` 把若干样本拼成
+``(tokens, mask, sentences, runs, chapters, days)``：
 tokens ``(B, 10, 128, 100)``、mask ``(B, 10)``、sentences ``list[str]``、
-runs/chapters ``(B,)`` int64。
+runs/chapters/days ``(B,)`` int64。
+
+day 字段
+--------
+CSV 首列是 ``day``（整数字符串）。构造期把它和 ``run``、``chapter`` 一样直接
+解析成整数，汇总为 ``days``（与 ``rows`` 对齐）和 ``day_ids``（去重升序），
+供 leave-one-day-out 分组使用。
 
 单位换算
 --------
@@ -56,11 +64,11 @@ runs/chapters ``(B,)`` int64。
     from baseline.dataset import ReadingEEGDataset, pad_collate
 
     ds = ReadingEEGDataset("sub-04", "GarnettDream")
-    tokens, mask, sentence = ds[0]
+    tokens, mask, sentence, run, chapter, day = ds[0]
     # tokens (n_chars, 128, 100) float32 µV, mask (n_chars,) bool
 
     loader = DataLoader(ds, batch_size=64, collate_fn=pad_collate, shuffle=True)
-    tokens, mask, sentences = next(iter(loader))
+    tokens, mask, sentences, runs, chapters, days = next(iter(loader))
 """
 
 from __future__ import annotations
@@ -115,7 +123,10 @@ class ReadingEEGDataset(Dataset):
 
     Attributes:
         rows: 过滤后的 CSV 行（``dict``，保留原始字符串值，另加 ``_line``
-            记录其在 CSV 中的行号），供训练脚本按句子切分使用。
+            记录其在 CSV 中的行号），供训练脚本按句子/run/day 切分使用。
+        days: 与 ``rows`` 对齐的采集日数组（``np.ndarray``，int64），
+            可直接做 leave-one-day-out 的分组向量。
+        day_ids: 升序去重后的采集日列表，如 ``[1, 2, 3, 4, 5, 6]``。
         stats: 过滤统计（``n_rows`` / ``n_dropped_min_chars`` / ``n_dropped_dup``）。
     """
 
@@ -158,6 +169,8 @@ class ReadingEEGDataset(Dataset):
                 f"{subject}/{novel}: 过滤后没有样本"
                 f"（min_chars={min_chars}, dedup={dedup}）"
             )
+        self.days = np.array([int(row["day"]) for row in self.rows], dtype=np.int64)
+        self.day_ids = sorted(set(self.days.tolist()))
         self._check_runs_and_rows()
 
     # ------------------------------------------------------------------ 读取
@@ -165,9 +178,8 @@ class ReadingEEGDataset(Dataset):
     def _read_csv(self) -> list[dict]:
         """读取 CSV，给每行补一个 ``_line``（CSV 中的 1 基行号，表头为第 1 行）。"""
         with self.csv_path.open(encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
             rows = []
-            for line, row in enumerate(reader, start=2):
+            for line, row in enumerate(csv.DictReader(handle), start=2):
                 row["_line"] = line
                 rows.append(row)
         return rows
@@ -358,6 +370,10 @@ class ReadingEEGDataset(Dataset):
         return SFREQ
 
     @property
+    def n_days(self) -> int:
+        return len(self.day_ids)
+
+    @property
     def channel_names(self) -> list[str]:
         return list(CHANNEL_NAMES)
 
@@ -384,6 +400,7 @@ class ReadingEEGDataset(Dataset):
             str(row["sentence"]),
             run,
             int(row["chapter"]),
+            int(row["day"]),
         )
 
     def close(self) -> None:
@@ -395,20 +412,20 @@ class ReadingEEGDataset(Dataset):
 
 
 def pad_collate(
-    batch: list[tuple[torch.Tensor, torch.Tensor, str, int, int]]
+    batch: list[tuple[torch.Tensor, torch.Tensor, str, int, int, int]]
 ):
-    """把 ``(tokens, mask, sentence, run, chapter)`` 列表拼成定长 batch。
+    """把 ``(tokens, mask, sentence, run, chapter, day)`` 列表拼成定长 batch。
 
     句子长度（``n_chars``）在 1~10 之间浮动，这里统一按右侧补零对齐到
     ``MAX_TOKENS``。
 
     Returns:
-        ``(tokens, mask, sentences, runs, chapters)``
+        ``(tokens, mask, sentences, runs, chapters, days)``
 
         - ``tokens``：``(B, MAX_TOKENS, 128, TOKEN_SAMPLES)``，float32，µV
         - ``mask``：``(B, MAX_TOKENS)``，bool，True 表示真实 token
         - ``sentences``：长度 ``B`` 的 ``list[str]``
-        - ``runs`` / ``chapters``：``(B,)`` int64
+        - ``runs`` / ``chapters`` / ``days``：``(B,)`` int64
     """
     n_samples = len(batch)
     n_channels = batch[0][0].shape[1]
@@ -420,8 +437,9 @@ def pad_collate(
     sentences: list[str] = []
     runs = torch.empty(n_samples, dtype=torch.long)
     chapters = torch.empty(n_samples, dtype=torch.long)
+    days = torch.empty(n_samples, dtype=torch.long)
 
-    for i, (item, item_mask, sentence, run, chapter) in enumerate(batch):
+    for i, (item, item_mask, sentence, run, chapter, day) in enumerate(batch):
         length = item.shape[0]
         if length > MAX_TOKENS:
             raise ValueError(f"样本 token 数 {length} 超过 MAX_TOKENS={MAX_TOKENS}")
@@ -434,8 +452,9 @@ def pad_collate(
         sentences.append(sentence)
         runs[i] = run
         chapters[i] = chapter
+        days[i] = day
 
-    return tokens, mask, sentences, runs, chapters
+    return tokens, mask, sentences, runs, chapters, days
 
 
 def main() -> None:
@@ -446,22 +465,26 @@ def main() -> None:
         dataset = ReadingEEGDataset(subject, novel)
         datasets.append(dataset)
 
-        tokens, mask, sentence, run, chapter = dataset[0]
+        tokens, mask, sentence, run, chapter, day = dataset[0]
         print(
             f"{subject} {novel:<14} {len(dataset):>5} 条 | "
             f"首条 {tuple(tokens.shape)} {tokens.dtype} | "
-            f"run={run} chapter={chapter} | "
+            f"day={day} run={run} chapter={chapter} | "
             f"µV 范围 [{tokens.min():.1f}, {tokens.max():.1f}] | {sentence!r}"
         )
         print(f"  过滤统计: {dataset.stats}")
+        print(
+            f"  day: {dataset.n_days} 个 {dataset.day_ids} | "
+            f"分布 {dict(zip(*np.unique(dataset.days, return_counts=True)))}"
+        )
 
     first = datasets[0]
     loader = DataLoader(first, batch_size=4, collate_fn=pad_collate)
-    tokens, mask, sentences, runs, chapters = next(iter(loader))
+    tokens, mask, sentences, runs, chapters, days = next(iter(loader))
     print(f"\n{first.subject} {first.novel} 取一个 batch (batch_size=4):")
     print(f"  tokens {tuple(tokens.shape)} {tokens.dtype}")
     print(f"  mask   {tuple(mask.shape)} {mask.dtype} -> 每条真实 token 数 {mask.sum(dim=1).tolist()}")
-    print(f"  run    {runs.tolist()}  chapter {chapters.tolist()}")
+    print(f"  day {days.tolist()}  run {runs.tolist()}  chapter {chapters.tolist()}")
     print(f"  text   {sentences}")
 
     for dataset in datasets:

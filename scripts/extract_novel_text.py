@@ -25,10 +25,12 @@
 --------
 1. 前言：首个章节号之前的行全部丢弃。
 2. 章节号：形如 ``19`` 的纯数字行只用于标记章节起点，不写入正文。
-3. ``run``：EEG 采集轮次，从 1 起编号。
-4. ``onset`` / ``sample``：该 sentence 对应 ROWS 事件的时间与采样点；无 EEG 数据的整行丢弃。
-5. ``sentence`` 为原始折行片段，不做拼接或断句处理。
-6. ``n_chars``：非标点字符数，标点按 Unicode 类别 ``P*`` 判定。
+3. ``day``：阅读日程中的第几天，按小说分别从第 1 天起编号：LittlePrince
+   第 1 天为 run 1-4、第 2 天为 run 5-8；GarnettDream 第 1-6 天每天 3 个 run。
+4. ``run``：EEG 采集轮次，从 1 起编号。
+5. ``onset`` / ``sample``：该 sentence 对应 ROWS 事件的时间与采样点；无 EEG 数据的整行丢弃。
+6. ``sentence`` 为原始折行片段，不做拼接或断句处理。
+7. ``n_chars``：非标点字符数，标点按 Unicode 类别 ``P*`` 判定。
 """
 
 from __future__ import annotations
@@ -49,9 +51,15 @@ OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
 TEXT_COLUMN = 0  # 单列 Chinese_text
-FIELDS = ["run", "chapter", "sentence", "n_chars", "onset", "sample"]
+FIELDS = ["day", "run", "chapter", "sentence", "n_chars", "onset", "sample"]
 
 TASK = "task-reading"
+
+# 阅读日程：小说名 -> (起始日, [每天完成的 run 数, ...])
+DAILY_RUNS = {
+    "LittlePrince": (1, [4, 4]),  # 第 1 天 run 1-4，第 2 天 run 5-8
+    "GarnettDream": (1, [3] * 6),  # 第 1-6 天，每天 3 个 run
+}
 
 CHAPTER_RE = re.compile(r"^\d+$")
 RUN_FILE_RE = re.compile(rf"{Path(NOVEL_FILE).stem}_run_(\d+)\.xlsx$")
@@ -62,6 +70,17 @@ CH_EVENT_RE = re.compile(r"^CH(\d+)$")
 def count_chars(text: str) -> int:
     """统计非标点字符数，Unicode 类别以 P 开头的字符视为标点。"""
     return sum(1 for char in text if not unicodedata.category(char).startswith("P"))
+
+
+def day_of_run(novel_name: str, run: int) -> int:
+    """按阅读日程返回该 run 所属的天数。"""
+    start_day, runs_per_day = DAILY_RUNS[novel_name]
+    remaining = run
+    for offset, count in enumerate(runs_per_day):
+        if remaining <= count:
+            return start_day + offset
+        remaining -= count
+    raise ValueError(f"{novel_name}: run {run} 超出阅读日程（共 {sum(runs_per_day)} 个 run）")
 
 
 def read_lines(xlsx_path: Path) -> list[str]:
@@ -177,8 +196,9 @@ def extract(novel_dir: Path, subject: str) -> tuple[list[dict], str]:
         onset, sample = slots[position]
         records.append(
             {
-                "chapter": chapter,
+                "day": day_of_run(novel_dir.name, run),
                 "run": run,
+                "chapter": chapter,
                 "onset": onset,
                 "sample": sample,
                 "sentence": text,
