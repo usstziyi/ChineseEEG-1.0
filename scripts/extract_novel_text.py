@@ -45,7 +45,7 @@ import openpyxl
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SEGMENTED_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/novels/segmented_novel"
 EVENTS_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_80"
-OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed/novels"
+OUTPUT_DIR = PROJECT_ROOT / "datasets/preprocessed"
 
 NOVEL_FILE = "segmented_Chinense_novel.xlsx"
 TEXT_COLUMN = 0  # 单列 Chinese_text
