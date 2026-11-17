@@ -23,7 +23,7 @@ MNE 就会去找一个不存在的文件并抛 ``FileNotFoundError``。
 
 用法
 ----
-    python scripts/fix_brainvision_headers.py            # 直接纠错（默认扫描 filtered_0.5_30）
+    python scripts/fix_brainvision_headers.py            # 直接纠错（默认扫描 filtered_0.5_80）
     python scripts/fix_brainvision_headers.py --dry-run  # 只预览，不写回
     python scripts/fix_brainvision_headers.py --root <目录>
 """
@@ -34,7 +34,7 @@ import argparse
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-EEG_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_30"
+EEG_ROOT = PROJECT_ROOT / "datasets/ChineseEEG/derivatives/preproc/filtered_0.5_80"
 
 # 头文件字段 -> 该字段应指向的兄弟文件扩展名
 EXPECTED_EXT = {"DataFile": ".eeg", "MarkerFile": ".vmrk"}
